@@ -8,9 +8,10 @@ import { formatBRL, formatarData } from "@/lib/formatters";
 
 interface DashboardContentProps {
   notas: NotaFiscalDB[];
+  avisoConexao?: string;
 }
 
-export default function DashboardContent({ notas }: DashboardContentProps) {
+export default function DashboardContent({ notas, avisoConexao }: DashboardContentProps) {
   // Cálculos memorizados para evitar recomputação desnecessária a cada render
   const estatisticas = useMemo(() => {
     const totalValor = notas.reduce(
@@ -45,6 +46,14 @@ export default function DashboardContent({ notas }: DashboardContentProps) {
             ⬆️ Upload de Nota
           </a>
         </div>
+
+        {/* Aviso de conexão */}
+        {avisoConexao && (
+          <div className="flex gap-3 p-4 mb-6 bg-yellow-50 border border-yellow-200 rounded-xl text-yellow-800 text-sm">
+            <span>⚠️</span>
+            <span>{avisoConexao}</span>
+          </div>
+        )}
 
         {/* Estatísticas */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
