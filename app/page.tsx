@@ -1,10 +1,10 @@
 "use client";
-// components/NfeUpload.tsx
-// Componente de upload de NF-e com visualização dos dados extraídos
 
-import { useState, useCallback } from "react";
+import { useState, useRef } from "react";
 import type { NFe } from "@/lib/nfe-parser";
-import { formatBRL } from "@/lib/nfe-parser";
+import type { ValidacoesNFe } from "@/lib/types";
+import { formatBRL } from "@/lib/formatters";
+import { formatCNPJ, formatCPF, formatarData } from "@/lib/formatters";
 
 // ─── Tipos locais ─────────────────────────────────────────────────────────────
 
@@ -15,7 +15,12 @@ interface RespostaApi {
   dados?: NFe & { textoBruto?: string; aviso?: string; fonte?: string };
   fonte?: string;
   erro?: string;
+  validacoes?: ValidacoesNFe;
+  salvo?: boolean;
 }
+
+// Tamanho máximo de arquivo: 10 MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
@@ -25,14 +30,27 @@ export default function NfeUpload() {
   const [erro, setErro] = useState<string>("");
   const [aviso, setAviso] = useState<string>("");
   const [arrastando, setArrastando] = useState(false);
+  const [validacoes, setValidacoes] = useState<ValidacoesNFe | null>(null);
+  const [salvo, setSalvo] = useState<boolean>(false);
+  const [gerandoPDF, setGerandoPDF] = useState(false);
+  const pdfRef = useRef<HTMLDivElement>(null);
 
   // ── Upload ──────────────────────────────────────────────────────────────────
 
   async function enviarArquivo(arquivo: File) {
+    // Validação de tamanho no client-side
+    if (arquivo.size > MAX_FILE_SIZE) {
+      setErro("Arquivo muito grande. Tamanho máximo: 10 MB.");
+      setStatus("erro");
+      return;
+    }
+
     setStatus("carregando");
     setErro("");
     setAviso("");
     setNfe(null);
+    setValidacoes(null);
+    setSalvo(false);
 
     const form = new FormData();
     form.append("arquivo", arquivo);
@@ -57,6 +75,8 @@ export default function NfeUpload() {
       }
 
       setNfe(resposta.dados as NFe);
+      setValidacoes(resposta.validacoes || null);
+      setSalvo(resposta.salvo || false);
       setStatus("sucesso");
     } catch {
       setErro("Falha na conexão com o servidor. Verifique se ele está rodando.");
@@ -66,12 +86,12 @@ export default function NfeUpload() {
 
   // ── Drag & Drop ─────────────────────────────────────────────────────────────
 
-  const onDrop = useCallback((e: React.DragEvent) => {
+  const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setArrastando(false);
     const arquivo = e.dataTransfer.files[0];
     if (arquivo) enviarArquivo(arquivo);
-  }, []);
+  };
 
   const onDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -85,17 +105,71 @@ export default function NfeUpload() {
     if (arquivo) enviarArquivo(arquivo);
   };
 
+  // ── PDF Download ────────────────────────────────────────────────────────────
+
+  const baixarPDF = async () => {
+    if (!pdfRef.current || !nfe) return;
+
+    setGerandoPDF(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const jsPDF = (await import('jspdf')).default;
+
+      const canvas = await html2canvas(pdfRef.current, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+
+      const imgWidth = 210; // A4 width in mm
+      const pageHeight = 295; // A4 height in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft >= 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      pdf.save(`nfe-${nfe.numero}-${nfe.serie}.pdf`);
+    } catch (error) {
+      console.error('Erro ao gerar PDF:', error);
+      setErro('Erro ao gerar PDF. Tente novamente.');
+    } finally {
+      setGerandoPDF(false);
+    }
+  };
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-900">
-          Leitor de Nota Fiscal
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Suporta XML (NF-e), PDF (DANFE) e foto da nota
-        </p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">
+            Leitor de Nota Fiscal
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Suporta XML (NF-e), PDF (DANFE) e foto da nota
+          </p>
+        </div>
+        <a
+          href="/dashboard"
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          📊 Dashboard
+        </a>
       </div>
 
       {/* ── Área de upload ── */}
@@ -129,7 +203,7 @@ export default function NfeUpload() {
                 d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <p className="text-sm font-medium">Arraste o arquivo aqui</p>
-            <p className="text-xs text-gray-400">ou clique para selecionar</p>
+            <p className="text-xs text-gray-400">ou clique para selecionar (máx. 10 MB)</p>
             <p className="text-xs text-gray-400">.xml · .pdf · .png · .jpg</p>
           </div>
         )}
@@ -151,9 +225,71 @@ export default function NfeUpload() {
         </div>
       )}
 
+      {/* ── Validações Fiscais ── */}
+      {status === "sucesso" && validacoes && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-gray-900">Validações Fiscais</h2>
+            {salvo && (
+              <span className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded-full">
+                ✓ Salvo no banco
+              </span>
+            )}
+          </div>
+
+          {/* Status das validações */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <ValidacaoItem
+              label="Chave Acesso"
+              valido={validacoes.chaveValida}
+            />
+            <ValidacaoItem
+              label="CNPJ Emitente"
+              valido={validacoes.cnpjEmitenteValido}
+            />
+            <ValidacaoItem
+              label="CNPJ/CPF Dest."
+              valido={validacoes.cnpjDestinatarioValido}
+            />
+            <ValidacaoItem
+              label="Data Emissão"
+              valido={validacoes.dataEmissaoValida}
+            />
+            <ValidacaoItem
+              label="Totais"
+              valido={validacoes.totaisCorretos}
+            />
+          </div>
+
+          {/* Erros */}
+          {validacoes.erros.length > 0 && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-xl">
+              <h3 className="text-sm font-medium text-red-800 mb-2">Erros encontrados:</h3>
+              <ul className="text-sm text-red-700 space-y-1">
+                {validacoes.erros.map((erroItem, i) => (
+                  <li key={i}>• {erroItem}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Avisos */}
+          {validacoes.avisos.length > 0 && (
+            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
+              <h3 className="text-sm font-medium text-yellow-800 mb-2">Avisos:</h3>
+              <ul className="text-sm text-yellow-700 space-y-1">
+                {validacoes.avisos.map((avisoItem, i) => (
+                  <li key={i}>• {avisoItem}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Resultado ── */}
       {status === "sucesso" && nfe && (
-        <div className="space-y-4">
+        <div ref={pdfRef} className="space-y-4">
 
           {/* Cabeçalho da nota */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -293,13 +429,29 @@ export default function NfeUpload() {
             </div>
           )}
 
-          {/* Botão nova nota */}
-          <button
-            onClick={() => { setStatus("idle"); setNfe(null); }}
-            className="w-full py-2.5 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
-          >
-            Carregar outra nota
-          </button>
+          {/* Botões de ação */}
+          <div className="flex gap-3">
+            <button
+              onClick={baixarPDF}
+              disabled={gerandoPDF}
+              className="flex-1 py-2.5 text-sm text-white bg-red-600 border border-red-600 rounded-xl hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {gerandoPDF ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Gerando PDF...
+                </span>
+              ) : (
+                "📄 Baixar PDF"
+              )}
+            </button>
+            <button
+              onClick={() => { setStatus("idle"); setNfe(null); }}
+              className="flex-1 py-2.5 text-sm text-gray-600 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+            >
+              Carregar outra nota
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -360,25 +512,13 @@ function CartaoInfo({
   );
 }
 
-// ─── Utilitários de formatação ────────────────────────────────────────────────
-
-function formatCNPJ(cnpj: string): string {
-  const n = cnpj.replace(/\D/g, "");
-  if (n.length !== 14) return cnpj;
-  return `${n.slice(0, 2)}.${n.slice(2, 5)}.${n.slice(5, 8)}/${n.slice(8, 12)}-${n.slice(12)}`;
-}
-
-function formatCPF(cpf: string): string {
-  const n = cpf.replace(/\D/g, "");
-  if (n.length !== 11) return cpf;
-  return `${n.slice(0, 3)}.${n.slice(3, 6)}.${n.slice(6, 9)}-${n.slice(9)}`;
-}
-
-function formatarData(dataISO: string): string {
-  if (!dataISO) return "—";
-  try {
-    return new Date(dataISO).toLocaleDateString("pt-BR");
-  } catch {
-    return dataISO.slice(0, 10);
-  }
+function ValidacaoItem({ label, valido }: { label: string; valido: boolean }) {
+  return (
+    <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-xl">
+      <span className={`text-lg ${valido ? 'text-green-600' : 'text-red-600'}`}>
+        {valido ? '✓' : '✗'}
+      </span>
+      <span className="text-sm font-medium text-gray-700">{label}</span>
+    </div>
+  );
 }
